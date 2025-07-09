@@ -1,0 +1,25 @@
+streamlit
+torch
+transformers
+opencv-python-headless
+scikit-learn
+
+Pillow
+numpy
+
+
+# If you don't have an NVIDIA GPU, install the CPU version:
+torch 
+torchvision 
+torchaudio
+
+# Install other major libraries
+ultralytics 
+transformers 
+opencv-python-headless 
+insightface
+scikit-learn 
+pillow
+deep-sort-realtime
+onnxruntime
+# git clone https://github.com/levan92/deep_sort_pytorch.git
