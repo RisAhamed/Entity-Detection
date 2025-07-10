@@ -1,278 +1,226 @@
-
 import streamlit as st
 import os
-import cv2
-import numpy as np
-import torch
 import pickle
+import numpy as np
 from PIL import Image
+import torch
 from transformers import CLIPProcessor, CLIPModel
+import insightface
 from sklearn.metrics.pairwise import cosine_similarity
-import logging
 
-# --- Setup logging ---
-LOGS_DIR = "logs"
-os.makedirs(LOGS_DIR, exist_ok=True)
-log_file_path = os.path.join(LOGS_DIR, "vsearch.log")
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file_path, mode='w'), # Overwrite log on each run
-        logging.StreamHandler()
-    ]
-)
-
-logging.info("Starting V-Search application V2.0")
-
-# --- 1. Configuration and Setup ---
-st.set_page_config(layout="wide", page_title="V-Search Engine")
-
-# Define local directories
+# --- Configuration ---
+st.set_page_config(layout="wide", page_title="Forensic V-Search")
 WORKSPACE_DIR = "workspace"
-VIDEOS_DIR = os.path.join(WORKSPACE_DIR, "uploaded_videos")
-KEYFRAMES_DIR = os.path.join(WORKSPACE_DIR, "keyframes")
-EMBEDDINGS_DIR = os.path.join(WORKSPACE_DIR, "embeddings")
-os.makedirs(VIDEOS_DIR, exist_ok=True)
-os.makedirs(KEYFRAMES_DIR, exist_ok=True)
-os.makedirs(EMBEDDINGS_DIR, exist_ok=True)
+ANALYSIS_DIR = os.path.join(WORKSPACE_DIR, "analysis_data")
 
-# --- 2. Model and Device Loading (Crucial for Performance) ---
+# --- Model Loading (Cached for UI performance) ---
 @st.cache_resource
-def load_model_and_device():
-    """
-    Loads the CLIP model, processor, and determines the processing device.
-    Uses a more powerful model: 'openai/clip-vit-large-patch14'.
-    """
-    logging.info("Cache miss: Loading CLIP model and determining device...")
-    st.write("Cache miss: Loading a more powerful CLIP model (this may take a minute on first run)...")
-    
-    # --- IMPROVEMENT 1: Use a more powerful model ---
-    model_name = "openai/clip-vit-large-patch14"
-    model = CLIPModel.from_pretrained(model_name)
-    processor = CLIPProcessor.from_pretrained(model_name)
-    
-    # --- IMPROVEMENT 2: Use GPU if available ---
+def load_search_models():
+    """Loads models needed for generating query embeddings."""
+    st.write("Cache miss: Loading search models...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-    
-    logging.info(f"CLIP model '{model_name}' loaded successfully to device: {device}")
-    st.success(f"Model loaded onto device: {device.upper()}")
-    return model, processor, device
+    print(f"Using device for search: {device}")
 
-# --- 3. Core Processing Functions ---
+    # CLIP for Text & Image Queries
+    clip_model_name = "openai/clip-vit-large-patch14"
+    clip_model = CLIPModel.from_pretrained(clip_model_name).to(device)
+    clip_processor = CLIPProcessor.from_pretrained(clip_model_name)
 
-def save_uploaded_file(uploaded_file, target_dir):
-    file_path = os.path.join(target_dir, uploaded_file.name)
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    return file_path
+    # InsightFace for Face Queries
+    face_analysis_model = insightface.app.FaceAnalysis(providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    face_analysis_model.prepare(ctx_id=0, det_size=(640, 640))
 
-def extract_keyframes_scenedetect(video_path, threshold=30.0):
-    """
-    --- IMPROVEMENT 3: Smarter Keyframe Extraction ---
-    Extracts keyframes based on significant changes between frames (scene detection).
-    This avoids saving many identical frames from static scenes.
-    """
-    video_name = os.path.splitext(os.path.basename(video_path))[0]
-    keyframe_subfolder = os.path.join(KEYFRAMES_DIR, video_name)
-    os.makedirs(keyframe_subfolder, exist_ok=True)
-    
-    logging.info(f"Starting scene-detect keyframe extraction for: {video_path}")
-    cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0:
-        logging.error("Failed to read video FPS.")
-        return None, 0
+    models = {
+        'device': device,
+        'clip_model': clip_model.eval(), # Set to evaluation mode
+        'clip_processor': clip_processor,
+        'face_model': face_analysis_model
+    }
+    st.success("Search models loaded.")
+    return models
 
-    prev_frame = None
-    saved_frame_count = 0
-    frame_count = 0
+# --- Data Loading ---
+@st.cache_data
+def load_analysis_data(analysis_file_path):
+    """Loads the pre-processed analysis data for a video."""
+    st.write(f"Cache miss: Loading analysis data from {analysis_file_path}...")
+    if not os.path.exists(analysis_file_path):
+        st.error(f"Analysis file not found! Please process the video first using 'process_video.py'.")
+        return None
+    with open(analysis_file_path, 'rb') as f:
+        data = pickle.load(f)
+    st.success(f"Loaded {len(data)} object instances.")
+    return data
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
 
-        # Always save the first frame
-        if prev_frame is None:
-            is_new_scene = True
-        else:
-            # Convert frames to grayscale for faster comparison
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray_prev_frame = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-            
-            # Calculate absolute difference and its mean
-            diff = cv2.absdiff(gray_frame, gray_prev_frame)
-            mean_diff = np.mean(diff)
-            
-            is_new_scene = mean_diff > threshold
-
-        if is_new_scene:
-            timestamp_sec = frame_count / fps
-            timestamp_str = f"{int(timestamp_sec // 3600):02d}-{int((timestamp_sec % 3600) // 60):02d}-{int(timestamp_sec % 60):02d}"
-            keyframe_path = os.path.join(keyframe_subfolder, f"frame_{timestamp_str}.jpg")
-            cv2.imwrite(keyframe_path, frame)
-            saved_frame_count += 1
-            logging.info(f"Scene change detected. Saved keyframe: {keyframe_path} (diff: {mean_diff if prev_frame is not None else 'N/A'})")
-
-        prev_frame = frame
-        frame_count += 1
-
-    cap.release()
-    logging.info(f"Scene-detect extraction complete: {saved_frame_count} frames saved.")
-    return keyframe_subfolder, saved_frame_count
-
-@st.cache_data(show_spinner=False)
-def get_embeddings_from_keyframes(_model, _processor, _device, keyframe_folder):
-    """
-    Generates and saves embeddings for keyframes. Now device-aware.
-    """
-    video_name = os.path.basename(keyframe_folder)
-    embeddings_file_path = os.path.join(EMBEDDINGS_DIR, f"{video_name}_embeddings_large.pkl")
-
-    if os.path.exists(embeddings_file_path):
-        logging.info(f"Loading cached embeddings from {embeddings_file_path}")
-        with open(embeddings_file_path, "rb") as f:
-            return pickle.load(f)
-
-    logging.info(f"Generating new embeddings for {keyframe_folder}")
-    image_files = sorted([os.path.join(keyframe_folder, f) for f in os.listdir(keyframe_folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))])
-    embeddings_data = []
-    
-    progress_bar = st.progress(0, text="Generating embeddings...")
-    for i, img_path in enumerate(image_files):
-        try:
-            image = Image.open(img_path).convert("RGB")
-            # --- Move inputs to the correct device ---
-            inputs = _processor(images=image, return_tensors="pt").to(_device)
-            with torch.no_grad():
-                image_features = _model.get_image_features(**inputs)
-            
-            image_features /= image_features.norm(dim=-1, keepdim=True)
-            embeddings_data.append({"path": img_path, "embedding": image_features.cpu().numpy().flatten()})
-            progress_bar.progress((i + 1) / len(image_files), text=f"Generating embeddings: {i+1}/{len(image_files)}")
-        except Exception as e:
-            logging.warning(f"Could not process image {img_path}: {e}")
-    
-    progress_bar.empty()
-    with open(embeddings_file_path, "wb") as f:
-        pickle.dump(embeddings_data, f)
-    logging.info(f"Saved {len(embeddings_data)} new embeddings to {embeddings_file_path}")
-    return embeddings_data
-
-def get_query_embedding(_model, _processor, _device, text=None, image=None):
-    """
-    --- IMPROVEMENT 4: Unified & Robust Query Processing ---
-    Generates a normalized embedding for either a text or image query.
-    """
+def get_query_embedding(models, text=None, image=None, face_image=None):
+    """Generates an embedding for the user's query."""
+    device = models['device']
     if text:
-        # For text, we can use templates to make the query more robust
-        templates = [f"a photo of {text}", f"a scene with {text}", f"an image of {text}"]
-        inputs = _processor(text=templates, return_tensors="pt", padding=True, truncation=True).to(_device)
+        inputs = models['clip_processor'](text=text, return_tensors="pt").to(device)
         with torch.no_grad():
-            text_features = _model.get_text_features(**inputs)
-        # Average the embeddings from the templates
-        text_features = text_features.mean(dim=0, keepdim=True)
-        text_features /= text_features.norm(dim=-1, keepdim=True)
-        return text_features.cpu().numpy()
+            embedding = models['clip_model'].get_text_features(**inputs)
     elif image:
-        query_pil_image = Image.open(image).convert("RGB")
-        inputs = _processor(images=query_pil_image, return_tensors="pt").to(_device)
+        pil_image = Image.open(image).convert("RGB")
+        inputs = models['clip_processor'](images=pil_image, return_tensors="pt").to(device)
         with torch.no_grad():
-            image_features = _model.get_image_features(**inputs)
-        image_features /= image_features.norm(dim=-1, keepdim=True)
-        return image_features.cpu().numpy()
-    return None
+            embedding = models['clip_model'].get_image_features(**inputs)
+    elif face_image:
+        pil_image = Image.open(face_image).convert("RGB")
+        cv2_image = np.array(pil_image)[:, :, ::-1] # Convert to BGR for insightface
+        faces = models['face_model'].get(cv2_image)
+        if faces and len(faces) > 0:
+            return faces[0].normed_embedding # Return as numpy array directly
+        else:
+            return None # No face found in query image
 
-def find_best_matches(query_embedding, keyframe_embeddings, top_k=6):
-    if not keyframe_embeddings: return []
-    keyframe_vectors = np.array([d['embedding'] for d in keyframe_embeddings])
-    similarities = cosine_similarity(query_embedding.reshape(1, -1), keyframe_vectors).flatten()
-    top_indices = np.argsort(similarities)[::-1][:top_k]
+    embedding /= embedding.norm(dim=-1, keepdim=True)
+    return embedding.cpu().numpy().flatten()
+
+
+
+# The function signature will now accept the models dictionary
+def search_objects(query_embedding, analysis_data, models, text_query=None, search_type='appearance', top_k=12):
+    """
+    Searches through the analysis data, with an optional re-scoring step for text queries.
+    """
+    if query_embedding is None: return []
+
+    candidate_objects = []
+    for obj in analysis_data:
+        if search_type == 'appearance':
+            candidate_objects.append(obj)
+        elif search_type == 'face' and obj.get('face_embedding') is not None:
+            candidate_objects.append(obj)
     
-    results = []
-    for i in top_indices:
-        results.append((keyframe_embeddings[i]['path'], similarities[i]))
-        logging.info(f"Match: {os.path.basename(keyframe_embeddings[i]['path'])}, Score: {similarities[i]:.4f}")
-    return results
+    if not candidate_objects:
+        return []
 
-# --- 4. Streamlit User Interface ---
+    # Extract the relevant embeddings from our candidates
+    embedding_key = 'appearance_embedding' if search_type == 'appearance' else 'face_embedding'
 
-model, processor, device = load_model_and_device()
 
-st.title("🎬 V-Search: Local Video Query Engine (V2)")
-st.markdown("This enhanced version uses a more powerful model and smarter processing for better results.")
-
-# --- UI: Video Selection and Processing ---
-st.header("Step 1: Select or Upload a Video")
-video_files = [f for f in os.listdir(VIDEOS_DIR) if f.lower().endswith(('.mp4', '.mov', '.avi'))]
-selected_video_name = st.selectbox("Choose a video:", ["Upload a new video..."] + video_files)
-
-uploaded_video = None
-if selected_video_name == "Upload a new video...":
-    uploaded_video = st.file_uploader("Upload video", type=["mp4", "mov", "avi"])
-    if uploaded_video:
-        st.session_state.video_path = save_uploaded_file(uploaded_video, VIDEOS_DIR)
-else:
-    st.session_state.video_path = os.path.join(VIDEOS_DIR, selected_video_name)
-
-if 'video_path' in st.session_state and st.session_state.video_path:
-    st.video(st.session_state.video_path)
     
-    st.header("Step 2: Process the Video")
-    st.write("Using scene-change detection for smarter keyframe extraction.")
-    if st.button("Process Video & Generate Embeddings"):
-        with st.spinner("Detecting scenes and extracting keyframes..."):
-            keyframe_folder, frame_count = extract_keyframes_scenedetect(st.session_state.video_path)
-            if keyframe_folder:
-                st.success(f"Extracted {frame_count} keyframes to `{keyframe_folder}`")
-                st.session_state.keyframe_folder = keyframe_folder
+    
+    candidate_embeddings = np.array([obj[embedding_key] for obj in candidate_objects])
+    similarities = cosine_similarity(query_embedding.reshape(1, -1), candidate_embeddings).flatten()
+    
+    # --- KEY IMPROVEMENT: Re-scoring for Text Queries ---
+    if text_query and search_type == 'appearance':
+        print("Performing re-scoring with negative prompt...")
+        # Define a generic negative prompt
+        negative_prompt = "a photo of an empty background, a logo, a blurry image, a pattern"
+        negative_embedding = get_query_embedding(models, text=negative_prompt)
         
-        if 'keyframe_folder' in st.session_state:
-            # Note: arguments to cached function must be consistent
-            st.session_state.embeddings = get_embeddings_from_keyframes(model, processor, device, st.session_state.keyframe_folder)
-            st.success(f"Successfully generated and saved {len(st.session_state.embeddings)} embeddings!")
+        # Calculate similarity to the negative prompt
+        negative_similarities = cosine_similarity(negative_embedding.reshape(1, -1), candidate_embeddings).flatten()
+        
+        # Adjust the original scores. We penalize images that are also similar to the negative prompt.
+        # The 0.5 is a weight, can be tuned.
+        final_scores = similarities - (0.5 * negative_similarities)
+    else:
+        final_scores = similarities
 
-# --- UI: Search Interface ---
-video_name_for_search = os.path.splitext(os.path.basename(st.session_state.get('video_path', '')))[0]
-embedding_file_for_search = os.path.join(EMBEDDINGS_DIR, f"{video_name_for_search}_embeddings_large.pkl")
+    # Now use `final_scores` for ranking instead of `similarities`
+    top_indices = np.argsort(final_scores)[::-1][:top_k*5] 
+    
+    # ... (the de-duplication part remains the same, but uses final_scores) ...
+    best_results_by_track = {}
+    for i in top_indices:
+        obj = candidate_objects[i]
+        track_id = obj['track_id']
+        score = final_scores[i] # Use the new score
+        
+        if track_id not in best_results_by_track or score > best_results_by_track[track_id]['score']:
+            # Also store the original similarity for display, as the new score is not intuitive (can be < 0)
+            best_results_by_track[track_id] = {'object': obj, 'score': similarities[i]}
+    
+    # Sort by the ORIGINAL score for user display
+    sorted_unique_results = sorted(best_results_by_track.values(), key=lambda x: x['score'], reverse=True)
+    
+    return sorted_unique_results[:top_k]
 
-if os.path.exists(embedding_file_for_search):
-    st.header(f"Step 3: Search in '{video_name_for_search}'")
+# --- Main Application UI ---
+st.title("👁️ Forensic V-Search")
+st.markdown("An interactive tool to search pre-processed videos using text, images, or faces.")
 
-    if 'embeddings' not in st.session_state or st.session_state.get('current_video') != video_name_for_search:
-        with open(embedding_file_for_search, "rb") as f:
-            st.session_state.embeddings = pickle.load(f)
-        st.session_state.current_video = video_name_for_search
+# --- Load Models ---
+models = load_search_models()
 
-    tab1, tab2 = st.tabs(["🔍 Text Search", "🖼️ Image Search"])
-    with tab1:
-        text_query = st.text_input("Enter text query:", "A person wearing a blue shirt")
-        if st.button("Search with Text", key="text_btn"):
-            if text_query and 'embeddings' in st.session_state:
-                with st.spinner("Searching..."):
-                    query_emb = get_query_embedding(model, processor, device, text=text_query)
-                    results = find_best_matches(query_emb, st.session_state.embeddings, top_k=6)
-                    st.subheader("Top Results:")
-                    if not results: st.write("No matches found.")
+# --- UI: Video Selection ---
+st.header("1. Select Processed Video")
+processed_files = [f for f in os.listdir(ANALYSIS_DIR) if f.endswith("_analysis.pkl")]
+if not processed_files:
+    st.warning("No processed videos found! Please run 'process_video.py' first.")
+else:
+    selected_file = st.selectbox("Choose a video analysis file:", processed_files)
+    
+    # Load data for the selected video
+    analysis_data = load_analysis_data(os.path.join(ANALYSIS_DIR, selected_file))
+    
+    if analysis_data:
+        # --- UI: Search Tabs ---
+        st.header("2. Perform Search")
+        tab1, tab2, tab3 = st.tabs(["📝 Text Search", "🖼️ Image Similarity Search", "🧑 Face Recognition Search"])
+
+        # --- Text Search Tab ---
+        with tab1:
+            text_query = st.text_input("Enter your free-text query:", "a person wearing a red shirt")
+            if st.button("Search by Text", key="text_search_btn"):
+                with st.spinner("Generating text embedding and searching..."):
+                    query_emb = get_query_embedding(models, text=text_query)
+                    results = search_objects(query_emb, analysis_data, models, text_query=text_query, search_type='appearance')
+
+                    # results = search_objects(query_emb, analysis_data, search_type='appearance')
+                
+                st.subheader(f"Top Results for: '{text_query}'")
+                if not results:
+                    st.write("No matches found.")
+                else:
+                    cols = st.columns(4)
+                    for i, res in enumerate(results):
+                        with cols[i % 4]:
+                            st.image(res['object']['object_crop_path'], caption=f"Score: {res['score']:.2f}", use_column_width=True)
+
+        # --- Image Similarity Search Tab ---
+        with tab2:
+            image_query = st.file_uploader("Upload an image of an object (person, car, etc.)", type=['jpg', 'jpeg', 'png'], key="img_sim_uploader")
+            if image_query:
+                st.image(image_query, "Your query image:", width=150)
+                if st.button("Search by Image", key="img_search_btn"):
+                    with st.spinner("Generating image embedding and searching..."):
+                        query_emb = get_query_embedding(models, image=image_query)
+                        results = search_objects(query_emb, analysis_data, models, search_type='...')
+                    
+                    st.subheader(f"Top Similarity Results:")
+                    if not results:
+                        st.write("No matches found.")
                     else:
-                        cols = st.columns(3)
-                        for i, (path, score) in enumerate(results):
-                            with cols[i % 3]: st.image(path, caption=f"Match: {score:.2f}", use_column_width=True)
+                        cols = st.columns(4)
+                        for i, res in enumerate(results):
+                            with cols[i % 4]:
+                                st.image(res['object']['object_crop_path'], caption=f"Score: {res['score']:.2f}", use_column_width=True)
+        
+        # --- Face Recognition Search Tab ---
+        with tab3:
+            face_query = st.file_uploader("Upload a clear image of a face", type=['jpg', 'jpeg', 'png'], key="face_uploader")
+            if face_query:
+                st.image(face_query, "Your query face:", width=150)
+                if st.button("Search by Face", key="face_search_btn"):
+                    with st.spinner("Generating face embedding and searching..."):
+                        query_emb = get_query_embedding(models, face_image=face_query)
+                        if query_emb is None:
+                            st.error("No face detected in the uploaded image. Please try another one.")
+                        else:
+                            results = search_objects(query_emb, analysis_data, search_type='...')
 
-    with tab2:
-        image_query = st.file_uploader("Upload image query", type=["jpg", "jpeg", "png"], key="img_uploader")
-        if image_query:
-            st.image(image_query, caption="Query image", width=200)
-            if st.button("Search with Image", key="img_btn"):
-                with st.spinner("Searching..."):
-                    query_emb = get_query_embedding(model, processor, device, image=image_query)
-                    results = find_best_matches(query_emb, st.session_state.embeddings, top_k=6)
-                    st.subheader("Top Results:")
-                    if not results: st.write("No matches found.")
-                    else:
-                        cols = st.columns(3)
-                        for i, (path, score) in enumerate(results):
-                            with cols[i % 3]: st.image(path, caption=f"Match: {score:.2f}", use_column_width=True)
+                            st.subheader(f"Top Face Recognition Results:")
+                            if not results:
+                                st.write("No matching faces found in the video.")
+                            else:
+                                cols = st.columns(4)
+                                for i, res in enumerate(results):
+                                    with cols[i % 4]:
+                                        st.image(res['object']['object_crop_path'], caption=f"Score: {res['score']:.2f}", use_column_width=True)
+
+

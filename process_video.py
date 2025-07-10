@@ -1,16 +1,17 @@
 import os
 import cv2
 import torch
-import pickle
+import pickle   
 import numpy as np
 from PIL import Image
 from ultralytics import YOLO
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPModel, CLIPProcessor
 import insightface
 from tqdm import tqdm
+from rembg import remove
 
-# --- DeepSORT Imports ---
-from deep_sort_realtime.deep_sort_realtime import DeepSort
+from deep_sort_realtime.deepsort_tracker import DeepSort
+# from deep_sort_realtime import DeepSort
 
 # --- Configuration ---
 # Directories
@@ -66,7 +67,16 @@ def load_models():
         'face_model': face_analysis_model
     }
     return models
-
+def remove_background(image_crop):
+    """Uses rembg to remove the background from an image crop."""
+    # rembg expects a PIL image and returns a PIL image
+    pil_image = Image.fromarray(cv2.cvtColor(image_crop, cv2.COLOR_BGR2RGB))
+    output_pil = remove(pil_image)
+    # Convert back to a format we can use (e.g., with a white background)
+    background = Image.new('RGB', output_pil.size, (255, 255, 255))
+    background.paste(output_pil, mask=output_pil.split()[3]) # 3 is the alpha channel
+    # Convert back to OpenCV format for saving/processing
+    return cv2.cvtColor(np.array(background), cv2.COLOR_RGB2BGR)
 
 def get_appearance_embedding(crop_image, models):
     """Generates a CLIP embedding for a cropped object image."""
@@ -165,17 +175,22 @@ def process_video(video_path, models):
             for track in outputs:
                 x1, y1, x2, y2, track_id, cls_id = map(int, track)
                 
+                # --- NEW, IMPROVED CODE ---
                 # Crop the object from the frame
                 crop = frame[y1:y2, x1:x2]
                 if crop.size == 0: continue
-                
-                # Save the crop
+
+                # --- KEY IMPROVEMENT: Remove background ---
+                segmented_crop = remove_background(crop)
+
+                # Save the CROP WITH a background for user viewing
                 crop_filename = f"track_{track_id}_frame_{frame_idx}.jpg"
                 crop_path = os.path.join(video_crops_dir, crop_filename)
-                cv2.imwrite(crop_path, crop)
+                cv2.imwrite(crop_path, crop) # Save the original crop
 
-                # Generate Embeddings
-                appearance_emb = get_appearance_embedding(crop, models)
+                # Generate Embeddings using the SEGMENTED CROP
+                appearance_emb = get_appearance_embedding(segmented_crop, models)
+                # ... rest of the loop remains the same ...
                 face_emb = None
                 class_name = models['yolo'].names[cls_id]
                 if class_name == 'person':
@@ -210,8 +225,8 @@ def process_video(video_path, models):
 if __name__ == "__main__":
     # Put the name of the video you want to process here
     # Make sure the video is in the 'workspace/uploaded_videos' folder
-    target_video_name = "your_video_here.mp4" 
-    video_path = os.path.join(VIDEOS_DIR, target_video_name)
+    video_path = 'WIN_20250602_17_47_19_Pro.mp4'
+    # video_path = os.path.join(VIDEOS_DIR, target_video_name)
 
     if not os.path.exists(video_path):
         print(f"Error: Video file not found at {video_path}")
