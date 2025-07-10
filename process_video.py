@@ -10,8 +10,7 @@ import insightface
 from tqdm import tqdm
 
 # --- DeepSORT Imports ---
-from deep_sort_pytorch.utils.parser import get_config
-from deep_sort_pytorch.deep_sort import DeepSort
+from deep_sort_realtime.deep_sort_realtime import DeepSort
 
 # --- Configuration ---
 # Directories
@@ -36,17 +35,18 @@ def load_models():
     yolo_model = YOLO("yolov8l.pt") # 'l' for large, good balance
 
     # DeepSORT for Object Tracking
-    cfg = get_config()
-    cfg.merge_from_file("deep_sort_pytorch/configs/deep_sort.yaml")
-    deepsort = DeepSort(cfg.DEEPSORT.REID_CKPT,
-                        max_dist=cfg.DEEPSORT.MAX_DIST,
-                        min_confidence=cfg.DEEPSORT.MIN_CONFIDENCE,
-                        nms_max_overlap=cfg.DEEPSORT.NMS_MAX_OVERLAP,
-                        max_iou_distance=cfg.DEEPSORT.MAX_IOU_DISTANCE,
-                        max_age=cfg.DEEPSORT.MAX_AGE,
-                        n_init=cfg.DEEPSORT.N_INIT,
-                        nn_budget=cfg.DEEPSORT.NN_BUDGET,
-                        use_cuda=True if device == 'cuda' else False)
+    deepsort = DeepSort(
+        max_iou_distance=0.7,
+        max_age=30,
+        n_init=3,
+        nms_max_overlap=1.0,
+        max_cosine_distance=0.2,
+        nn_budget=None,
+        embedder="mobilenet",
+        half=True,
+        bgr=True,
+        embedder_gpu=True if device == 'cuda' else False
+    )
     
     # CLIP for Appearance Embeddings
     clip_model_name = "openai/clip-vit-large-patch14"
@@ -138,8 +138,25 @@ def process_video(video_path, models):
 
         # --- Step 2: Object Tracking (DeepSORT) ---
         if len(results_for_deepsort) > 0:
-            xywhs, confs, clss = zip(*results_for_deepsort)
-            outputs = models['deepsort'].update(np.array(xywhs), np.array(confs), clss, frame)
+            # Convert to format expected by deep_sort_realtime
+            detections = []
+            for xywh, conf, cls in results_for_deepsort:
+                detections.append((xywh, conf, models['yolo'].names[cls]))
+            
+            tracks = models['deepsort'].update_tracks(detections, frame=frame)
+            outputs = []
+            for track in tracks:
+                if track.is_confirmed():
+                    bbox = track.to_tlbr()  # top left bottom right
+                    track_id = track.track_id
+                    # Find the class_id from the original detections
+                    class_id = None
+                    for xywh, conf, cls in results_for_deepsort:
+                        if abs(bbox[0] - xywh[0]) < 10 and abs(bbox[1] - xywh[1]) < 10:  # Rough matching
+                            class_id = cls
+                            break
+                    if class_id is not None:
+                        outputs.append([bbox[0], bbox[1], bbox[2], bbox[3], track_id, class_id])
         else:
             outputs = []
 
