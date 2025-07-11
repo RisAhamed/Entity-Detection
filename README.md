@@ -63,27 +63,28 @@ cd Entity-Detection
  ```
  
 2. Create and Activate the Conda Environment
-We will create a dedicated Conda environment to keep all dependencies isolated. The requirements.txt file specifies all the necessary packages.
+We will create a dedicated Conda environment to keep all dependencies isolated. The requirements.txt file specifies all the necessary packages. Create a new conda environment named 'vsearch' with Python 3.10
+```
 
-Generated bash# Create a new conda environment named 'vsearch' with Python 3.10
 conda create --name vsearch python=3.10 -y
-
-# Activate the newly created environment
+```
+ Activate the newly created environment
+ ```
 conda activate vsearch
- 
- 
+ ```
  
 3. Install Dependencies
 Now, install all the required Python packages using pip and the provided requirements.txt file.
 
 Important: The PyTorch installation command depends on your CUDA version. Visit the PyTorch website to get the correct command for your system.
 
-Generated bash# Example for CUDA 11.8 (REPLACE if your version is different)
+Example for CUDA 11.8 (REPLACE if your version is different)
+```
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
 # Install all other packages from requirements.txt
 pip install -r requirements.txt
-
+```
 (Note: The first time you run the scripts, some models like InsightFace and YOLO will automatically download their pre-trained weights, which may take a few moments.)
 
 
