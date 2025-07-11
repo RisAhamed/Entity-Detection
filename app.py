@@ -104,12 +104,12 @@ st.title("👁️ Forensic V-Search")
 st.markdown("Search pre-processed videos using text, images, or faces.")
 
 models = load_search_models()
-processed_files = [f for f in os.listdir(ANALYSIS_DIR) if f.endswith("_analysis.pkl")]
+processed_files = 'workspace/analysis_data/crowd_vedio2_analysis.pkl'
 if not processed_files:
     st.warning("No processed videos found! Run 'process_video.py' first.")
 else:
     selected_file = st.selectbox("Choose a video analysis file:", processed_files)
-    analysis_data = load_analysis_data(os.path.join(ANALYSIS_DIR, selected_file))
+    analysis_data = load_analysis_data('EntityDetection/Entity-Detection/workspace/analysis_data/crowd_vedio2_analysis.pkl')
 
     if analysis_data:
         st.header("Perform Search")
