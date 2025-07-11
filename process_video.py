@@ -11,12 +11,14 @@ from tqdm import tqdm
 
 # Using the modern, well-maintained deep-sort-realtime library
 from deep_sort_realtime.deepsort_tracker import DeepSort
+from pathlib import Path
 
-# --- Configuration ---
-WORKSPACE_DIR = "workspace"
-VIDEOS_DIR = os.path.join(WORKSPACE_DIR, "uploaded_videos")
-OBJECT_CROPS_DIR = os.path.join(WORKSPACE_DIR, "object_crops")
-ANALYSIS_DIR = os.path.join(WORKSPACE_DIR, "analysis_data")
+# --- Configuration (REVISED) ---
+SCRIPT_DIR = Path(__file__).resolve().parent
+WORKSPACE_DIR = SCRIPT_DIR / "workspace"
+VIDEOS_DIR = WORKSPACE_DIR / "uploaded_videos"
+OBJECT_CROPS_DIR = WORKSPACE_DIR / "object_crops"
+ANALYSIS_DIR = WORKSPACE_DIR / "analysis_data"
 os.makedirs(VIDEOS_DIR, exist_ok=True)
 os.makedirs(OBJECT_CROPS_DIR, exist_ok=True)
 os.makedirs(ANALYSIS_DIR, exist_ok=True)
@@ -191,11 +193,12 @@ def process_video(video_path, models):
                 object_data = {
                     "track_id": f"{video_name}_track_{track_id}",
                     "base_class": class_name,
-                    "timestamp": timestamp,
-                    "object_crop_path": crop_path,
+                    "timestamp": timestamp,"object_crop_path": str(Path(crop_path).relative_to(SCRIPT_DIR)),
+                    
                     "bounding_box": [x1, y1, x2, y2],
                     "appearance_embedding": appearance_emb,
-                    "face_embedding": face_emb
+                    "face_embedding": face_emb,
+                     
                 }
                 all_objects_data.append(object_data)
 
