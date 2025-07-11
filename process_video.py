@@ -27,7 +27,7 @@ os.makedirs(ANALYSIS_DIR, exist_ok=True)
 FRAME_INTERVAL = 1
 
 # --- Model Loading ---
-def load_models():
+def load_models(yolo_model= 'yolov8l.pt'):
     """Loads all necessary models and sets up the device."""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -218,7 +218,7 @@ def process_video(video_path, models):
 if __name__ == "__main__":
     # --- IMPORTANT ---
 
-    target_video_name = "crowd_vedio2.mp4" 
+    target_video_name = "10secvideo.mp4" 
 
     if not os.path.exists(target_video_name):
         print(f"Error: Video file not found at '{target_video_name}'")
@@ -231,5 +231,5 @@ if __name__ == "__main__":
             shutil.copy(target_video_name, video_workspace_path)
 
         print("Loading all AI models. This may take a moment...")
-        models = load_models()
+        models = load_models(yolo_model = 'yolo')
         process_video(video_workspace_path, models)
