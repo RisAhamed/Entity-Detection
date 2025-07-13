@@ -63,10 +63,10 @@ cd Entity-Detection
  ```
  
 2. Create and Activate the Conda Environment
-We will create a dedicated Conda environment to keep all dependencies isolated. The requirements.txt file specifies all the necessary packages. Create a new conda environment named 'vsearch' with Python 3.10
+We will create a dedicated Conda environment to keep all dependencies isolated. The requirements.txt file specifies all the necessary packages. Create a new conda environment named 'vsearch' with Python > 3.12
 ```
 
-conda create --name vsearch python=3.10 -y
+conda create --name vsearch python=3.12 -y
 ```
  Activate the newly created environment
  ```
