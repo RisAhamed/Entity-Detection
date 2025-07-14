@@ -5,7 +5,7 @@ __pycache__/
 workspace*
 # C extensions
 *.so
-
+deep_sort*
 # Distribution / packaging
 .Python
 build/

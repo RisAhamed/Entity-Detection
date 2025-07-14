@@ -61,12 +61,27 @@ First, clone this repository to your local machine.
 git clone https://github.com/RisAhamed/Entity-Detection
 cd Entity-Detection
  ```
- 
-2. Create and Activate the Conda Environment
-We will create a dedicated Conda environment to keep all dependencies isolated. The requirements.txt file specifies all the necessary packages. Create a new conda environment named 'vsearch' with Python > 3.12
-```
 
-conda create --name vsearch python=3.12 -y
+
+## Step 1: Create the virtual environment
+
+Run this command in your terminal or command prompt:
+
+```
+python -m venv vence
+```
+On Windows (CMD)
+```
+vence\Scripts\activate.bat
+```
+On Linux or macOS (bash/zsh)
+```
+source vence/bin/activate
+```
+2. Create and Activate the Conda Environment
+We will create a dedicated Conda environment to keep all dependencies isolated. The requirements.txt file specifies all the necessary packages. Create a new conda environment named 'vsearch' with Python 3.10
+```
+conda create --name vsearch python=3.10 -y
 ```
  Activate the newly created environment
  ```
