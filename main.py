@@ -165,14 +165,16 @@ def process_video(video_path, models, desired_classes=DESIRED_CLASSES, frame_ski
     print("Processing complete.")
 
 if __name__ == "__main__":
-    target_video_name = "10secvideo.mp4"
-    if not os.path.exists(target_video_name):
-        print(f"Error: Video file not found at '{target_video_name}'")
-    else:
-        video_workspace_path = os.path.join(VIDEOS_DIR, os.path.basename(target_video_name))
-        if not os.path.exists(video_workspace_path):
-            import shutil
-            shutil.copy(target_video_name, video_workspace_path)
-        print("Loading all AI models. This may take a moment...")
-        models = load_models(yolo_model='yolov8l.pt')
-        process_video(video_workspace_path, models)
+    # target_video_name = "10secvideo.mp4"
+    # if not os.path.exists(target_video_name):
+    #     print(f"Error: Video file not found at '{target_video_name}'")
+    # else:
+    # video_workspace_path = os.path.join(VIDEOS_DIR, os.path.basename(target_video_name))
+    # if not os.path.exists(video_workspace_path):
+    #     import shutil
+    #     shutil.copy(target_video_name, video_workspace_path)
+    print("Loading all AI models. This may take a moment...")
+    models = load_models(yolo_model='yolov8l.pt')
+    from pathlib import Path
+    video_path = Path(VIDEOS_DIR)
+    process_video(video_path, models)
